@@ -27,10 +27,14 @@
 //[/MiscUserDefs]
 
 //==============================================================================
-GComponent::GComponent ()
+GComponent::GComponent () : juce::AudioAppComponent(otherDeviceManager)
 {
     //[Constructor_pre] You can add your own custom stuff here..
     state = stopped;
+    otherDeviceManager.initialise(2, 2, nullptr, true);
+    audioSettings.reset(new AudioDeviceSelectorComponent(otherDeviceManager, 0, 2, 0, 2, true, true, true, true));
+    addAndMakeVisible(audioSettings.get());
+    setAudioChannels(2, 2);
     //[/Constructor_pre]
 
     music_name.reset (new juce::Label ("Music Header",
@@ -115,17 +119,15 @@ GComponent::GComponent ()
 
 
     //[UserPreSize]
-    formatManager.reset(new juce::AudioFormatManager);
-    formatManager->registerBasicFormats();
-    play_stop_button->setEnabled(false);
-    
     //[/UserPreSize]
 
     setSize (1024, 768);
 
 
     //[Constructor] You can add your own custom stuff here..
-    setAudioChannels (2, 2);
+    formatManager.registerBasicFormats();
+    transport.addChangeListener(this);
+    play_stop_button->setEnabled(false);
     //[/Constructor]
 }
 
@@ -145,58 +147,11 @@ GComponent::~GComponent()
 
 
     //[Destructor]. You can add your own custom destruction code here..
-    formatManager = nullptr;
-    fileChooser = nullptr;
-    this->shutdownAudio();
+    shutdownAudio();
     //[/Destructor]
 }
 
 //==============================================================================
-void GComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
-{
-    transport.prepareToPlay(samplesPerBlockExpected, sampleRate);
-}
-
-void GComponent::transportStateChanged(TransportState newState)
-{
-    if (newState != state)
-    {
-        state = newState;
-        
-        switch (state) {
-            case stopped:
-                transport.setPosition(0.0);
-                break;
-                
-            case starting:
-                transport.start();
-                break;
-                
-            case stopping:
-                transport.stop();
-                break;
-        }
-        
-        // Stoppend
-    }
-}
-
-void GComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill)
-{
-    if (playSource.get() == nullptr)
-    {
-        bufferToFill.clearActiveBufferRegion();
-        return;
-    }
-
-    transport.getNextAudioBlock (bufferToFill);
-}
-
-void GComponent::releaseResources()
-{
-    transport.releaseResources();
-}
-
 void GComponent::paint (juce::Graphics& g)
 {
     //[UserPrePaint] Add your own custom painting code here..
@@ -225,7 +180,8 @@ void GComponent::sliderValueChanged (juce::Slider* sliderThatWasMoved)
     if (sliderThatWasMoved == music_slider.get())
     {
         //[UserSliderCode_music_slider] -- add your slider handling code here..
-
+        if (state == playing)
+            transport.setPosition(music_slider->getValue());
         //[/UserSliderCode_music_slider]
     }
     else if (sliderThatWasMoved == volume_slider.get())
@@ -243,7 +199,6 @@ void GComponent::sliderValueChanged (juce::Slider* sliderThatWasMoved)
 }
 
 void GComponent::buttonClicked (juce::Button* buttonThatWasClicked)
-// if clicked any button
 {
     //[UserbuttonClicked_Pre]
     //[/UserbuttonClicked_Pre]
@@ -265,21 +220,36 @@ void GComponent::buttonClicked (juce::Button* buttonThatWasClicked)
     }
     else if (buttonThatWasClicked == open_button.get())
     {
+        //[UserButtonCode_open_button] -- add your button handler code here..
         // opening a file
-        fileChooser.reset(new juce::FileChooser("Choose a file", juce::File::getSpecialLocation(juce::File::userDesktopDirectory), "*.wav;*.mp3", true, false));
-        if (fileChooser->browseForFileToOpen())
+
+        FileChooser chooser ("Choose a Wav or AIFF File", File::getSpecialLocation(File::userDesktopDirectory), "*.wav; *.mp3");
+
+            //if the user chooses a file
+        if (chooser.browseForFileToOpen())
         {
-            juce::File myFile;
-            myFile = fileChooser->getResult();
-            music_name->setText(myFile.getFileName(), juce::dontSendNotification);
-            juce::AudioFormatReader *reader = formatManager->createReaderFor(myFile);
-            std::unique_ptr<juce::AudioFormatReaderSource> tempSource (new juce::AudioFormatReaderSource(reader, true));
-            playSource.reset(tempSource.release());
-            music_length_label->setText(std::to_string(playSource->getTotalLength() / reader->sampleRate), juce::dontSendNotification);
-            play_stop_button->setEnabled(true);
-            play_stop_button->setButtonText("Play");
-            // rewrite count of hours
-            transport.setSource(tempSource.release());
+            File myFile;
+            //what did the user choose?
+            myFile = chooser.getResult();
+
+            //read the file
+            AudioFormatReader* reader = formatManager.createReaderFor(myFile);
+
+            if (reader != nullptr)
+            {
+                //get the file ready to play
+                std::unique_ptr<AudioFormatReaderSource> tempSource (new AudioFormatReaderSource (reader, true));
+
+                transport.setSource(tempSource.get());
+                transportStateChanged(stopped);
+
+                playSource.reset(tempSource.release());
+                music_name->setText(myFile.getFileName(), juce::dontSendNotification);
+                music_length_label->setText(std::to_string(transport.getLengthInSeconds()), juce::dontSendNotification);
+                play_stop_button->setEnabled(true);
+                play_stop_button->setButtonText("Play");
+                music_slider->setRange(0, transport.getLengthInSeconds());
+            }
         }
         //[/UserButtonCode_open_button]
     }
@@ -342,9 +312,81 @@ void GComponent::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWhe
     //[/UserCode_mouseWheelMove]
 }
 
+void GComponent::focusGained (FocusChangeType cause)
+{
+    //[UserCode_focusGained] -- Add your code here...
+
+    //[/UserCode_focusGained]
+}
+
 
 
 //[MiscUserCode] You can add your own definitions of your custom methods or any other code here...
+
+void GComponent::prepareToPlay (int samplesPerBlockExpected, double sampleRate)
+{
+    transport.prepareToPlay(samplesPerBlockExpected, sampleRate);
+}
+
+
+void GComponent::transportStateChanged(TransportState newState)
+{
+    if (newState != state)
+    {
+        state = newState;
+
+        switch (state) {
+            case stopped:
+                transport.setPosition(0.0);
+                break;
+
+            case playing:
+                break;
+
+            case starting:
+                transport.start();
+                break;
+
+            case stopping:
+                transport.stop();
+                break;
+        }
+
+        // Stoppend
+    }
+}
+
+void GComponent::getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill)
+{
+    bufferToFill.clearActiveBufferRegion();
+
+    transport.getNextAudioBlock(bufferToFill);
+}
+
+void GComponent::releaseResources()
+{
+    // This will be called when the audio device stops, or when it is being
+    // restarted due to a setting change.
+
+    // For more details, see the help for AudioProcessor::releaseResources()
+}
+
+void GComponent::changeListenerCallback (juce::ChangeBroadcaster *source)
+{
+    if (source == &transport)
+    {
+        if (transport.isPlaying())
+            transportStateChanged(playing);
+        else
+            transportStateChanged(stopped);
+    }
+}
+
+
+void GComponent::changePosition()
+{
+
+}
 //[/MiscUserCode]
 
 
@@ -371,6 +413,7 @@ BEGIN_JUCER_METADATA
     <METHOD name="mouseUp (const juce::MouseEvent&amp; e)"/>
     <METHOD name="mouseDoubleClick (const juce::MouseEvent&amp; e)"/>
     <METHOD name="mouseWheelMove (const juce::MouseEvent&amp; e, const juce::MouseWheelDetails&amp; wheel)"/>
+    <METHOD name="focusGained (FocusChangeType cause)"/>
   </METHODS>
   <BACKGROUND backgroundColour="ff323e44"/>
   <LABEL name="Music Header" id="da2613bad7a614b7" memberName="music_name"

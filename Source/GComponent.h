@@ -21,6 +21,7 @@
 
 //[Headers]     -- You can add your own extra header files here --
 #include <JuceHeader.h>
+using namespace juce;
 //[/Headers]
 
 
@@ -33,7 +34,8 @@
     Describe your class and how it works here!
                                                                     //[/Comments]
 */
-class GComponent  : public juce::AudioAppComponent,
+class GComponent  : public AudioAppComponent,
+                    public ChangeListener,
                     public juce::Slider::Listener,
                     public juce::Button::Listener
 {
@@ -62,27 +64,36 @@ public:
     void mouseUp (const juce::MouseEvent& e) override;
     void mouseDoubleClick (const juce::MouseEvent& e) override;
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
+    void focusGained (FocusChangeType cause) override;
 
 
 
 private:
     //[UserVariables]   -- You can add your own custom variables in this section.
-    
+    AudioDeviceManager otherDeviceManager;
+    std::unique_ptr <AudioDeviceSelectorComponent> audioSettings;
+
     enum TransportState
     {
         stopped,
+        playing,
         starting,
         stopping
     };
-    
+
+    double current_position_sec;
+    double k; // k in defining current music position for slider
     TransportState state;
-    
-    std::unique_ptr<juce::AudioFormatManager> formatManager;
-    std::unique_ptr<juce::AudioFormatReaderSource> playSource;
-    std::unique_ptr<juce::FileChooser> fileChooser;
-    juce::AudioTransportSource transport;
-    
+
+
+    AudioFormatManager formatManager;
+    std::unique_ptr<AudioFormatReaderSource> playSource;
+    AudioTransportSource transport;
+
     void transportStateChanged(TransportState newState);
+    void changeListenerCallback (juce::ChangeBroadcaster *source) override;
+
+    void changePosition();
     //[/UserVariables]
 
     //==============================================================================
